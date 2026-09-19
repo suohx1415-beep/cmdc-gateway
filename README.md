@@ -2,7 +2,58 @@
 
 把 **Command Code CLI (`cmdc`)** 的订阅后端反向代理成本地网关，对外暴露 **OpenAI** 与 **Anthropic** 两套兼容 API。任何支持 OpenAI SDK / Anthropic SDK 的工具都可以直接指向本网关，实际推理走你自己的 cmdc 账号。附带一个 **Web 控制面板**，可以在浏览器里完成登录（API Key 或浏览器授权）、查看模型、直接调试。
 
-零第三方依赖，只需要 Node.js >= 22。
+零第三方依赖，不需要 `npm install`，只需要 Node.js >= 22。
+
+---
+
+## 使用范围与免责声明
+
+**这是本机自用的逆向兼容层，不是官方产品，也不绕过任何计费。** 开始前请务必看完这一段。
+
+- **它逆向 cmdc CLI 的请求链路**（路由、请求体、响应格式、设备指纹），把 CLI 的协议翻译成 OpenAI / Anthropic 两套标准 API。所有推理仍然发往同一个后端（`api.commandcode.ai`），用的是**你自己的凭据、扣的是你自己的订阅额度**。它不会免费解锁任何能力。
+- **仓库里没有任何凭据。** 账号 Key、access key、指标与日志都只在你本机的 `~/.cmdc-gateway/`（仓库外），从不入库。你需要自己提供 Key。
+- **协议是逆向产物，随时可能失效。** 上游改一次接口，网关就可能翻译不出来；上游升级后，`models.json` 也需要按新版重抽（见下文限制）。**作者不提供任何可用性保证。**
+- **请自行确认并遵守上游的服务条款。** 这类代理工具与上游 ToS 是否兼容由你自行判断；因使用本工具产生的任何后果由使用者自行承担。建议仅限**个人、本机**使用，不要公开分发他人的凭据，也不要把它做成对外服务。
+- **不要把这个端口暴露到公网。** 默认监听 `0.0.0.0` 且局域网需要 access key，但网关花的是你的额度；不对外用时把 `host` 改回 `127.0.0.1`。
+- **本仓库未附带开源许可证**（即保留所有权利）。代码仅供阅读、学习与自用；要用于其他用途请先联系作者。
+
+---
+
+## 环境要求
+
+| 要求 | 说明 |
+| --- | --- |
+| **Node.js >= 22** | 唯一依赖。零第三方包，**不需要 `npm install`** |
+| **已安装并登录的 cmdc CLI** | 只有「生成模型目录」这一步需要它：脚本从它打包的产物里抽取模型清单与套餐规则。已经在用 cmdc 的话就已经具备 |
+| 网络 | 需能访问 `api.commandcode.ai` |
+| 操作系统 | Windows / macOS / Linux 均可；一键启动的 `.bat` 仅 Windows |
+
+---
+
+## 快速开始
+
+```bash
+git clone https://github.com/suohx1415-beep/cmdc-gateway.git
+cd cmdc-gateway
+
+# 1) 生成模型目录（读本机已安装的 command-code；装到非默认位置就用 --from 指路径）
+node scripts/extract-models.mjs
+
+# 2) 启动网关
+node src/server.mjs
+# 或
+npm start
+```
+
+启动后：
+
+1. 打开面板 <http://127.0.0.1:8810/panel>，在「账号」页登录你的 cmdc 账号（贴 API Key，或用浏览器授权；两种都不碰 cmdc 命令行自己那份凭据）。
+2. 把客户端指向 `http://127.0.0.1:8810/v1`（Anthropic SDK 用 `http://127.0.0.1:8810`）。
+3. 首次运行会自动固定端口 `8810` 并**生成一把随机 access key**，写在 `~/.cmdc-gateway/config.json`；本机访问不需要它，局域网访问必须带上。
+
+Windows 用户也可以直接双击 `start-gateway.bat` 用菜单启动（含端口冲突处理），详见下面的「启动方式详解」。
+
+> `models.json` 是按 cmdc **1.53.1** 的产物抽取并随仓库提供的。如果你本机的 cmdc 已经升级，重跑抽取脚本时可能需要适配新版 bundle；不重跑也能用，但模型清单与套餐规则可能已经过时。
 
 ---
 
@@ -226,17 +277,9 @@ client = OpenAI(base_url="http://192.168.1.100:8810/v1", api_key="cmdc_xxxxxxxx.
 
 ---
 
-## 快速开始
+## 启动方式详解（含 Windows 一键启动）
 
-```bash
-# 1) 生成模型目录（读取本机已安装的 command-code）
-node scripts/extract-models.mjs
-
-# 2) 启动网关
-node src/server.mjs
-# 或
-npm start
-```
+> 三步安装见文首「快速开始」。这一节讲端口固定、Windows 菜单与常见启动选项。
 
 ### Windows 一键启动
 
