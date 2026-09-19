@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,9 +25,15 @@ export const GATEWAY_CONFIG_FILE = path.join(GATEWAY_STORE_DIR, 'config.json');
 
 const DEFAULT_PORT = 8810;
 const DEFAULT_HOST = '0.0.0.0';
-// Shipped default access key: fixed on purpose so client configs never have to change.
-// Override it in ~/.cmdc-gateway/config.json or with `--client-key <key> --save-port`.
-const DEFAULT_ACCESS_KEY = 'cmdc_a9d974348498174d9e875ad59e8d87ddedb8e789';
+// The access key is generated once on first run and then persisted, so a client only ever has
+// to be configured once. The constant below is the old *shipped* default: it is kept purely to
+// recognise installs still using it, because it is documented in public and must be rotated.
+const LEGACY_PUBLIC_ACCESS_KEY = 'cmdc_a9d974348498174d9e875ad59e8d87ddedb8e789';
+
+/** 20 random bytes -> same shape as the old key (`cmdc_` + 40 hex chars). */
+function generateAccessKey() {
+  return `cmdc_${crypto.randomBytes(20).toString('hex')}`;
+}
 const DEFAULT_MODE = 'agent';
 const DEFAULT_PERMISSION_MODE = 'standard';
 const DEFAULT_MAX_TOKENS = 64_000;
@@ -181,8 +188,9 @@ function resolveHost(flags, env) {
 }
 
 /**
- * The access key is fixed, not random: a stable key means client configs never have to
- * change. Loopback stays exempt unless the operator pins an explicit key.
+ * The access key is random but stable: generated once on first run and persisted, so client
+ * configs never have to change after that. Loopback stays exempt unless the operator pins an
+ * explicit key.
  */
 function resolveAccessKey(flags, env, host) {
   const saved = readGatewayConfig();
@@ -192,12 +200,27 @@ function resolveAccessKey(flags, env, host) {
     return { accessKey: explicit, accessKeyExplicit: true, required: true };
   }
   if (typeof saved.accessKey === 'string' && saved.accessKey) {
-    return { accessKey: saved.accessKey, accessKeyExplicit: false, required: !isLoopbackHost(host) };
+    return {
+      accessKey: saved.accessKey,
+      accessKeyExplicit: false,
+      required: !isLoopbackHost(host),
+      // an install still holding the published legacy key: the operator has to be told
+      legacyPublic: saved.accessKey === LEGACY_PUBLIC_ACCESS_KEY,
+    };
   }
 
-  // first run: record the default so it is visible and editable in config.json
-  writeGatewayConfig({ ...saved, accessKey: DEFAULT_ACCESS_KEY });
-  return { accessKey: DEFAULT_ACCESS_KEY, accessKeyExplicit: false, required: !isLoopbackHost(host), defaulted: true };
+  // first run: generate a random key and persist it. Persisting is what keeps client configs
+  // valid across restarts, so a failed write is reported rather than silently regenerating
+  // (and therefore invalidating every client) on the next start.
+  const generated = generateAccessKey();
+  const persisted = writeGatewayConfig({ ...saved, accessKey: generated });
+  return {
+    accessKey: generated,
+    accessKeyExplicit: false,
+    required: !isLoopbackHost(host),
+    generated: true,
+    persistFailed: !persisted,
+  };
 }
 
 export function loadConfig(argv = process.argv.slice(2), env = process.env) {
@@ -211,7 +234,7 @@ export function loadConfig(argv = process.argv.slice(2), env = process.env) {
   const baseUrl = String(flags.baseUrl || env.CMD_GATEWAY_BASE_URL || API_BASE_URLS[apiEnv]).replace(/\/+$/, '');
   const { port, fixedPort, source: portSource, pinned } = resolvePort(flags, env);
   const { host, fixedHost, pinned: hostPinned } = resolveHost(flags, env);
-  const { accessKey, accessKeyExplicit, required: accessKeyRequired, defaulted } = resolveAccessKey(flags, env, host);
+  const { accessKey, accessKeyExplicit, required: accessKeyRequired, generated, legacyPublic, persistFailed } = resolveAccessKey(flags, env, host);
 
   const cwd = path.resolve(String(flags.cwd || env.CMD_GATEWAY_CWD || process.cwd()));
   const manifest = readGeneratedManifest();
@@ -243,7 +266,10 @@ export function loadConfig(argv = process.argv.slice(2), env = process.env) {
     accessKey,
     accessKeyExplicit,
     accessKeyRequired,
-    accessKeyDefault: Boolean(defaulted),
+    accessKeyDefault: Boolean(generated),
+    accessKeyGenerated: Boolean(generated),
+    accessKeyPersistFailed: Boolean(persistFailed),
+    accessKeyLegacyPublic: Boolean(legacyPublic),
     lan: !isLoopbackHost(host),
     cwd,
     callbackBase: String(flags.callbackBase || env.CMD_GATEWAY_CALLBACK_BASE || `http://127.0.0.1:${port}`).replace(/\/+$/, ''),
@@ -287,6 +313,9 @@ export function toPublicConfig(config) {
     accessKey: config.accessKey,
     accessKeyRequired: Boolean(config.accessKeyRequired),
     accessKeyExplicit: Boolean(config.accessKeyExplicit),
+    accessKeyGenerated: Boolean(config.accessKeyGenerated),
+    accessKeyLegacyPublic: Boolean(config.accessKeyLegacyPublic),
+    accessKeyPersistFailed: Boolean(config.accessKeyPersistFailed),
     useCliAuth: config.useCliAuth,
     fingerprint: config.fingerprint,
     requiresClientKey: Boolean(config.accessKeyRequired),

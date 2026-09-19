@@ -350,6 +350,7 @@ function paintStatus(){
     ? s.lanUrls.map(function(u){ return u + '/v1'; }).join('   ')
     : '未开放，仅本机可用';
   $('ov-accesskey').textContent = maskKey(s.accessKey);
+  setAccessKeyNote(s);
   $('ov-cli').textContent = s.cliVersion;
   $('ov-models').textContent = s.models.filterApplied ? s.models.accessible + ' / ' + s.models.total : String(s.models.total);
   $('ov-mode').textContent = s.mode + ' / ' + s.permissionMode;
@@ -567,6 +568,20 @@ function paintQuotaParts(){
       '<td>' + status + '</td></tr>';
   }
   body.innerHTML = rows;
+}
+
+function setAccessKeyNote(s){
+  var el = $('ov-accesskey-warn');
+  if (!el) return;
+  if (s.accessKeyLegacyPublic){
+    el.textContent = '⚠ 这个密钥是旧版本里公开写死的默认值：仓库公开后它等于公开口令，任何能访问本端口的人都能消耗你的订阅额度。建议立刻换成随机值 —— 加参数启动一次即可：--client-key cmdc_你的新密钥 --save-port';
+    el.className = 'msg show err';
+  } else if (s.accessKeyGenerated){
+    el.textContent = '首次运行时自动生成，已写入 config.json；客户端配置一次即可长期使用。想更换就加 --client-key cmdc_新密钥 --save-port。';
+    el.className = 'msg show info';
+  } else {
+    el.className = 'msg';
+  }
 }
 
 function cacheLevel(rate){
@@ -1230,6 +1245,7 @@ export function panelHtml() {
         <div class="row"><dt>固定端口</dt><dd class="mono" id="ov-port">-</dd></div>
         <div class="row"><dt>局域网地址</dt><dd class="mono" id="ov-lan">-</dd></div>
         <div class="row"><dt>访问密钥</dt><dd class="mono"><span id="ov-accesskey">-</span> <button class="btn" id="btn-copy-key" style="height:22px; padding:0 9px; font-size:11px">复制</button></dd></div>
+        <div class="msg" id="ov-accesskey-warn"></div>
         <div class="row"><dt>cli 版本</dt><dd class="mono" id="ov-cli">-</dd></div>
         <div class="row"><dt>可用模型</dt><dd class="mono" id="ov-models">-</dd></div>
         <div class="row"><dt>mode</dt><dd class="mono" id="ov-mode">-</dd></div>

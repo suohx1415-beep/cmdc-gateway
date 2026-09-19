@@ -31,6 +31,19 @@ function findPackageDir(explicit) {
   return null;
 }
 
+/**
+ * Provenance recorded in models.json. Never write the absolute path: it embeds the local
+ * username (`C:\Users\you\AppData\...`) into a file that is meant to be published. Render it
+ * relative to the node_modules root with forward slashes, so it is portable and anonymous.
+ */
+function portableSource(pkgDir, filePath) {
+  const rel = path.relative(path.dirname(pkgDir), filePath);
+  if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+    return `node_modules/${rel.split(path.sep).join('/')}`;
+  }
+  return `command-code/${path.basename(filePath)}`;
+}
+
 function parseArgs(argv) {
   const out = { from: null, out: path.join(PROJECT_ROOT, 'models.json') };
   for (let i = 0; i < argv.length; i += 1) {
@@ -284,7 +297,7 @@ function main() {
 
   const output = {
     generatedAt: new Date().toISOString(),
-    source: modelsPath,
+    source: portableSource(pkgDir, modelsPath),
     cliVersion: pkg.version,
     ...(access ? { access } : {}),
     models: models.length > 0 ? models : FALLBACK_MODELS,

@@ -923,6 +923,18 @@ export function createServer(config) {
   return server;
 }
 
+/** Explains where the access key came from, and shouts when it is the published legacy value. */
+function accessKeyNote(info) {
+  if (info.accessKeyExplicit) return '  (通过 --client-key 指定)';
+  if (info.accessKeyLegacyPublic) return '  ⚠ 这是已公开的旧默认值，建议更换：--client-key cmdc_新密钥 --save-port';
+  if (info.accessKeyGenerated) {
+    return info.accessKeyPersistFailed
+      ? '  ⚠ 首次生成但写盘失败：下次启动会再换一个，客户端会失效'
+      : '  (首次运行自动生成并已写入 config.json)';
+  }
+  return '  (来自 config.json)';
+}
+
 async function portOwner(port) {
   try {
     const { execFile } = await import('node:child_process');
@@ -970,7 +982,7 @@ function main() {
         `  base url   : http://127.0.0.1:${config.port}/v1  (本机客户端用这个)`,
         ...lanLines,
         `  port       : ${config.port}${info.portPinned ? ` 固定端口 (来自 ${config.configFile})` : ` 临时端口，固定端口是 ${config.fixedPort}`}`,
-        `  access key : ${config.accessKey}${info.accessKeyExplicit ? '  (通过 --client-key 指定)' : '  (默认，可改)'}`,
+        `  access key : ${config.accessKey}${accessKeyNote(info)}`,
         `  鉴权规则   : 本机 127.0.0.1 免鉴权；其它地址必须带 x-api-key 或 Authorization: Bearer`,
         `  backend    : ${info.baseUrl} (${info.apiEnv})`,
         `  accounts   : ${accounts.count}${accounts.count ? ` (${active ? `${active.userName} 当前` : '未选中'})` : ' - NO ACCOUNT'}${accounts.invalidCount ? ` · ${accounts.invalidCount} 个失效` : ''}${accounts.coolingCount ? ` · ${accounts.coolingCount} 个冷却中` : ''}`,

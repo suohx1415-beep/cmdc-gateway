@@ -59,31 +59,26 @@ cmdc CLI（`dist/cli.mjs`，v1.53.1）的真实请求链路：
 
 被拒绝时返回 `401 {"error":{"message":"Invalid gateway access key",...}}`。
 
-### access key 是固定的
+### access key：首次运行自动生成，之后固定
 
-密钥**不会每次随机生成**，默认就是一个固定值，客户端配置写一次永久有效：
-
-```
-cmdc_a9d974348498174d9e875ad59e8d87ddedb8e789
-```
-
-它同时被记在配置文件里，方便查看和修改：
+密钥**不是写死在代码里的**，也不是每次启动都变：**首次运行时随机生成一次（`cmdc_` + 40 位十六进制），写进配置文件，之后永久复用**。这样随机性和「客户端配置写一次就行」两个目标同时满足。
 
 ```jsonc
 // ~/.cmdc-gateway/config.json
 {
   "port": 8810,
   "host": "0.0.0.0",
-  "accessKey": "cmdc_a9d974348498174d9e875ad59e8d87ddedb8e789"
+  "accessKey": "cmdc_你自己机器上生成的那串"
 }
 ```
 
-- 即使 `config.json` 被删掉，重建时写回的也是这个默认值，不会变成随机串。
-- 优先级：`--client-key` / `CMD_GATEWAY_CLIENT_KEY`（本次生效）> 配置文件里的值 > 内置默认值。
-- **想改**：`--client-key cmdc_你自己的 --save-port` 写进配置文件，或直接编辑上面那个文件。
+- 生成时用 `crypto.randomBytes(20)`，不是可预测的序列。
+- 优先级：`--client-key` / `CMD_GATEWAY_CLIENT_KEY`（本次生效）> 配置文件里的值 > **首次运行时生成并写入**。
+- **想换**：`--client-key cmdc_你自己的 --save-port`（写进配置文件），或直接编辑上面那个文件。换了之后所有客户端要同步改。
 - 看密钥的地方：启动日志 `access key :` 一行、面板「概览」页（带复制按钮）、`start-gateway.bat` 菜单 `[2] 查看状态`。
+- 如果生成后写盘失败（比如目录不可写），启动日志会眀确警告 —— 否则下次启动会再生成一个，你所有客户端的 key 就全部失效了。
 
-> 这个默认值公开写在代码里，只够挡住"局域网里乱扫端口的人"，不是强口令。局域网不完全可信就换成自己的 key，并且别把端口转发到公网。
+> 旧版本曾经把一个固定值写死在源码里（`cmdc_a9d9743...`）。仓库公开后它就不再是密码了，所以现已改成自动生成。**如果你的安装里还是那一串**（升级前首次运行写进过 `config.json`），启动日志和面板「概览」页会持续警告并给出更换命令；不换也不会报错，但它等于公开口令。
 
 ### 客户端怎么连
 
@@ -97,7 +92,7 @@ base_url = http://127.0.0.1:8810/v1
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://192.168.1.67:8810/v1", api_key="cmdc_xxxxxxxx...")
+client = OpenAI(base_url="http://192.168.1.100:8810/v1", api_key="cmdc_xxxxxxxx...")
 ```
 
 `api_key` 字段填网关的 access key 就行 —— OpenAI SDK 会把它放进 `Authorization: Bearer`，网关两种头都认。你的机器的局域网地址在启动日志、面板「概览」页、以及 BAT 的「查看状态」里都能看到。
@@ -297,7 +292,7 @@ cmdc-gateway.bat start 8888       :: 用 8888 端口启动
 cmdc-gateway is running
   panel      : http://127.0.0.1:8810/panel
   base url   : http://127.0.0.1:8810/v1  (本机客户端用这个)
-  lan url    : http://192.168.1.67:8810/v1
+  lan url    : http://192.168.1.100:8810/v1
   port       : 8810 固定端口 (来自 C:\Users\you\.cmdc-gateway\config.json)
   access key : cmdc_xxxxxxxxxxxxxxxx  (局域网请求必须带)
   鉴权规则   : 本机 127.0.0.1 免鉴权；其它地址必须带 x-api-key 或 Authorization: Bearer
