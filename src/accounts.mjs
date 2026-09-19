@@ -17,6 +17,8 @@ const pendingStateFlushes = new Set();
 const pendingActiveFlushes = new Set();
 let stateFlushTimer = null;
 let activeFlushTimer = null;
+/** Who actually served the most recent request — distinct from the user's preferred account. */
+let lastServedId = null;
 
 function storeFile(config) {
   return config.storeFile ?? gatewayStoreFile(config.apiEnv);
@@ -54,6 +56,7 @@ function emptyStore(config) {
     activeId: null,
     accounts: [],
     states: {},
+    lastServedId: null,
   };
 }
 
@@ -66,6 +69,7 @@ export function readAccounts(config) {
   store.dashboard = typeof data.dashboard === 'string' && data.dashboard ? data.dashboard : 'all';
   store.activeId = typeof data.activeId === 'string' ? data.activeId : null;
   store.states = data.states && typeof data.states === 'object' && !Array.isArray(data.states) ? data.states : {};
+  store.lastServedId = typeof data.lastServedId === 'string' ? data.lastServedId : null;
 
   if (Array.isArray(data.accounts)) {
     store.accounts = data.accounts.map(normalizeAccount).filter(Boolean);
@@ -107,9 +111,10 @@ function stateSnapshot() {
   return states;
 }
 
-function hydrateRuntimeState(states) {
+function hydrateRuntimeState(states, servedId = null) {
   cooldowns.clear();
   invalidAccounts.clear();
+  lastServedId = typeof servedId === 'string' ? servedId : null;
   if (!states || typeof states !== 'object' || Array.isArray(states)) return;
   const now = Date.now();
   for (const [id, entry] of Object.entries(states)) {
@@ -131,6 +136,7 @@ function persistState(config) {
   const store = config.storeData;
   if (!store) return null;
   store.states = stateSnapshot();
+  store.lastServedId = lastServedId;
   return writeAccounts(config, store);
 }
 
@@ -144,6 +150,7 @@ function persist(config) {
   store.apiEnv = config.apiEnv;
   store.baseUrl = config.baseUrl;
   store.states = stateSnapshot();
+  store.lastServedId = lastServedId;
   return writeAccounts(config, store);
 }
 
@@ -232,7 +239,7 @@ export function loadAccounts(config) {
     }
   }
 
-  hydrateRuntimeState(store.states);
+  hydrateRuntimeState(store.states, store.lastServedId);
   config.storeData = store;
   config.accounts = store.accounts;
   config.activeId = store.activeId;
@@ -313,10 +320,12 @@ export function setActiveAccount(config, id) {
   if (isReadonlyStore(config)) return { ok: false, readonly: true };
   if (!config.accounts.some((account) => account.id === id)) return { ok: false };
   config.activeId = id;
+  // an explicit switch is a manual override of any cooldown on the target
   cooldowns.delete(id);
   const file = persist(config);
   syncRuntime(config);
-  return { ok: true, file };
+  // a dead key cannot be faked into working: report it so the UI warns instead of implying success
+  return { ok: true, file, invalid: isInvalid(id) };
 }
 
 export function setRotationMode(config, mode) {
@@ -419,16 +428,38 @@ export function noteSuccess(config, id) {
 }
 
 /**
- * Records the account that actually served a request. Called on the hot path, so the
- * credentials file is only written on a debounce instead of once per request.
+ * Records the account that actually served a request. Called on the hot path.
+ *
+ * `activeId` is the user's *preference*, so a concurrent request finishing on some other
+ * account must never silently undo a switch made in the panel. The preference only advances
+ * when it could not serve at all (cooling, marked invalid, or removed) — i.e. when rotation
+ * genuinely had to fall through. `lastServedId` separately tracks who really did the work, so
+ * the panel can show both without the two fighting each other.
  */
 export function noteServedAccount(config, id) {
-  if (config.rotationMode === 'off') return;
-  if (config.activeId === id) return;
-  const active = config.accounts.find((account) => account.id === id);
-  if (!active) return;
+  const account = config.accounts.find((entry) => entry.id === id);
+  if (!account) return;
+  const changed = lastServedId !== id;
+  lastServedId = id;
+
+  if (config.rotationMode === 'off' || config.activeId === id) {
+    if (changed) scheduleStateFlush(config);
+    return;
+  }
+
+  const preferredStillUsable =
+    Boolean(config.activeId) &&
+    config.accounts.some((entry) => entry.id === config.activeId) &&
+    !isCooling(config.activeId) &&
+    !isInvalid(config.activeId);
+  if (preferredStillUsable) {
+    // the user's choice is healthy: only persist who served, never rewrite the choice
+    if (changed) scheduleStateFlush(config);
+    return;
+  }
+
   config.activeId = id;
-  config.apiKey = active.apiKey;
+  config.apiKey = account.apiKey;
   config.apiKeySource = config.accounts.length ? 'gateway store' : config.apiKeySource;
   scheduleActiveFlush(config);
 }
@@ -451,6 +482,7 @@ export function publicAccounts(config) {
     authenticatedAt: account.authenticatedAt,
     addedAt: account.addedAt,
     active: account.id === config.activeId,
+    lastServed: account.id === lastServedId,
     coolingUntil: cooling[account.id] ?? null,
     invalid: invalidAccounts.has(account.id),
     invalidAt: invalidAccounts.get(account.id)?.at ?? null,
@@ -465,6 +497,7 @@ export function accountSummary(config) {
     mode: config.rotationMode,
     dashboard: config.dashboard ?? 'all',
     activeId: config.activeId,
+    lastServedId,
     count: config.accounts.length,
     multi: config.accounts.length > 1,
     coolingCount: accounts.filter((account) => account.coolingUntil).length,

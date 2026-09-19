@@ -408,6 +408,7 @@ function renderAccounts(summary){
       var c = q && q.credits ? q.credits : null;
       var tags = '';
       if (a.active) tags += ' <span class="tag active">当前</span>';
+      if (a.lastServed && !a.active) tags += ' <span class="tag">上次服务</span>';
       if (a.explicit) tags += ' <span class="tag">来自环境变量</span>';
       html += '<tr>' +
         '<td><div class="acc-name">' + esc(a.userName) + tags + '</div>' +
@@ -918,7 +919,9 @@ async function setDashScope(scope){
 
 async function doSetActive(id){
   try {
-    await api('/api/accounts/active', {method:'POST', body: JSON.stringify({id: id})});
+    var out = await api('/api/accounts/active', {method:'POST', body: JSON.stringify({id: id})});
+    if (out && out.warning) say('login-msg', out.warning, 'err');
+    else say('login-msg', '已设为当前账号：之后的新请求会优先打到它（看这行有没有出现「上次服务」标签就能确认）', 'ok');
     await refreshAll();
     restartLive();
   } catch(e){ say('login-msg', '切换账号失败：' + e.message, 'err'); }

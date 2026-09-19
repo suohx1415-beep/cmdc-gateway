@@ -728,7 +728,13 @@ export function createServer(config) {
         invalidatePlanContext();
         pushStatus(config);
         pushQuota(config);
-        sendJson(res, 200, { ok: true, accounts: accountSummary(config) });
+        sendJson(res, 200, {
+          ok: true,
+          accounts: accountSummary(config),
+          ...(result.invalid
+            ? { warning: '已设为当前账号，但它的 Key 已失效：请求会由其它可用账号实际服务，先点「重新校验」才能真正用它。' }
+            : {}),
+        });
         return;
       }
 
