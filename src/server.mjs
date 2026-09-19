@@ -351,7 +351,7 @@ function logRequest(config, route, detail) {
   process.stdout.write(`[${new Date().toISOString()}] ${route} ${detail}\n`);
 }
 
-function trackRequest({ model, protocol, stream, startedAt, firstEventAt, usage, error, account }) {
+function trackRequest({ model, protocol, stream, startedAt, firstEventAt, usage, reasoningChars = 0, error, account }) {
   const entry = recordRequest({
     t: startedAt,
     model,
@@ -366,6 +366,9 @@ function trackRequest({ model, protocol, stream, startedAt, firstEventAt, usage,
     cachedTokens: usage?.cacheReadTokens ?? 0,
     cacheWriteTokens: usage?.cacheWriteTokens ?? 0,
     completionTokens: usage?.outputTokens ?? 0,
+    reasoningTokens: usage?.reasoningTokens ?? 0,
+    textTokens: usage?.textTokens ?? 0,
+    reasoningChars,
     ...(error ? { error: error?.message ?? String(error) } : {}),
   });
   // the live feed is per-connection: a client scoped to one account must not see the others
@@ -475,6 +478,7 @@ async function handleAnthropic(req, res, config) {
       startedAt,
       firstEventAt,
       usage: reply.usage,
+      reasoningChars: reply.reasoningChars(),
       error,
       account: served,
     });

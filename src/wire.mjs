@@ -1,4 +1,11 @@
-export const EMPTY_USAGE = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+export const EMPTY_USAGE = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  reasoningTokens: 0,
+  textTokens: 0,
+};
 
 export function parseJsonObject(raw, fallback = {}) {
   if (raw && typeof raw === 'object') return raw;
@@ -47,14 +54,26 @@ export function toolOutputFromContent(content) {
   }
 }
 
+/**
+ * Upstream reports `outputTokens` inclusive of reasoning, plus a split under
+ * `outputTokenDetails` (and a top-level `reasoningTokens`). Keeping the split lets the panel
+ * answer "how much of this request was the model thinking".
+ */
 export function normalizeUsage(raw) {
   if (!raw || typeof raw !== 'object') return { ...EMPTY_USAGE };
-  const details = raw.inputTokenDetails ?? {};
+  const input = raw.inputTokenDetails ?? {};
+  const output = raw.outputTokenDetails ?? {};
+  const outputTokens = Number(raw.outputTokens) || 0;
+  const reasoningTokens = Number(raw.reasoningTokens ?? output.reasoningTokens) || 0;
+  const textTokens = Number(output.textTokens);
   return {
     inputTokens: Number(raw.inputTokens) || 0,
-    outputTokens: Number(raw.outputTokens) || 0,
-    cacheReadTokens: Number(details.cacheReadTokens) || 0,
-    cacheWriteTokens: Number(details.cacheWriteTokens) || 0,
+    outputTokens,
+    cacheReadTokens: Number(input.cacheReadTokens) || 0,
+    cacheWriteTokens: Number(input.cacheWriteTokens) || 0,
+    reasoningTokens,
+    // if the upstream ever omits the split, treat the remainder as text so both still add up
+    textTokens: Number.isFinite(textTokens) ? textTokens : Math.max(0, outputTokens - reasoningTokens),
   };
 }
 

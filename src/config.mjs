@@ -250,6 +250,10 @@ export function loadConfig(argv = process.argv.slice(2), env = process.env) {
     mode: String(flags.mode || env.CMD_GATEWAY_MODE || DEFAULT_MODE),
     permissionMode: String(flags.permissionMode || env.CMD_GATEWAY_PERMISSION_MODE || DEFAULT_PERMISSION_MODE),
     maxTokens: Number(flags.maxTokens || env.CMD_GATEWAY_MAX_TOKENS || DEFAULT_MAX_TOKENS),
+    // Empty by default on purpose: the gateway must not silently change model behaviour for
+    // clients that already work. Set it (e.g. "low") to cap reasoning depth when a client
+    // sends none — a client-specified value always wins over this default.
+    reasoningEffort: String(flags.reasoningEffort || env.CMD_GATEWAY_REASONING_EFFORT || '').trim(),
     cliVersion: String(flags.cliVersion || env.CMD_GATEWAY_CLI_VERSION || manifest?.cliVersion || DEFAULT_CLI_VERSION),
     projectSlug: String(flags.projectSlug || env.CMD_GATEWAY_PROJECT_SLUG || path.basename(cwd) || 'gateway').replace(/[^A-Za-z0-9._-]/g, '-'),
     planTtlMs: Number(flags.planTtlMs || env.CMD_GATEWAY_PLAN_TTL_MS || DEFAULT_PLAN_TTL_MS),
@@ -268,6 +272,7 @@ export function toPublicConfig(config) {
     mode: config.mode,
     permissionMode: config.permissionMode,
     maxTokens: config.maxTokens,
+    reasoningEffort: config.reasoningEffort || '',
     cliVersion: config.cliVersion,
     projectSlug: config.projectSlug,
     hasApiKey: Boolean(config.apiKey),

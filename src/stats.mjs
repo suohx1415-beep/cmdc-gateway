@@ -98,6 +98,10 @@ export function recordRequest(entry) {
     cachedTokens: entry.cachedTokens ?? 0,
     cacheWriteTokens: entry.cacheWriteTokens ?? 0,
     completionTokens: entry.completionTokens ?? 0,
+    // outputTokens already includes reasoning; these split it so the panel can show the share
+    reasoningTokens: entry.reasoningTokens ?? 0,
+    textTokens: entry.textTokens ?? 0,
+    reasoningChars: entry.reasoningChars ?? 0,
     cost: typeof cost === 'number' ? Math.round(cost * 1e8) / 1e8 : null,
     ...(entry.error ? { error: String(entry.error).slice(0, 200) } : {}),
   });
@@ -136,6 +140,12 @@ export function statsSnapshot({ hours = 24, accountId = 'all' } = {}) {
   const cachedTokens = window.reduce((sum, e) => sum + (e.cachedTokens || 0), 0);
   const completionTokens = window.reduce((sum, e) => sum + (e.completionTokens || 0), 0);
   const cacheWriteTokens = window.reduce((sum, e) => sum + (e.cacheWriteTokens || 0), 0);
+  const reasoningTokens = window.reduce((sum, e) => sum + (e.reasoningTokens || 0), 0);
+  const textTokens = window.reduce((sum, e) => sum + (e.textTokens || 0), 0);
+  const reasoningChars = window.reduce((sum, e) => sum + (e.reasoningChars || 0), 0);
+  // only requests that reported a split can vouch for the share; the rest are "unknown"
+  const reasoningKnown = window.filter((entry) => typeof entry.reasoningTokens === 'number');
+  const reasoningOutputTokens = reasoningKnown.reduce((sum, e) => sum + (e.completionTokens || 0), 0);
   const cost = window.reduce((sum, e) => sum + (e.cost || 0), 0);
   const withTtft = window.filter((entry) => typeof entry.ttftMs === 'number');
 
@@ -168,6 +178,11 @@ export function statsSnapshot({ hours = 24, accountId = 'all' } = {}) {
       promptTokens: 0,
       cachedTokens: 0,
       completionTokens: 0,
+      reasoningTokens: 0,
+      // output tokens of only those requests that actually reported a reasoning split:
+      // legacy records have no `reasoningTokens`, and counting them as "0 reasoning"
+      // would claim a measurement we never made
+      reasoningOutputTokens: 0,
       cost: 0,
       ttfts: [],
       price: modelPrice(key),
@@ -177,6 +192,8 @@ export function statsSnapshot({ hours = 24, accountId = 'all' } = {}) {
     row.promptTokens += entry.promptTokens || 0;
     row.cachedTokens += entry.cachedTokens || 0;
     row.completionTokens += entry.completionTokens || 0;
+    row.reasoningTokens += entry.reasoningTokens || 0;
+    if (typeof entry.reasoningTokens === 'number') row.reasoningOutputTokens += entry.completionTokens || 0;
     row.cost += entry.cost || 0;
     if (typeof entry.ttftMs === 'number') row.ttfts.push(entry.ttftMs);
     byModel.set(key, row);
@@ -189,6 +206,8 @@ export function statsSnapshot({ hours = 24, accountId = 'all' } = {}) {
       promptTokens: row.promptTokens,
       cachedTokens: row.cachedTokens,
       completionTokens: row.completionTokens,
+      reasoningTokens: row.reasoningTokens,
+      reasoningShare: row.reasoningOutputTokens ? row.reasoningTokens / row.reasoningOutputTokens : null,
       cacheHitRate: row.promptTokens ? row.cachedTokens / row.promptTokens : null,
       avgTtftMs: mean(row.ttfts),
       cost: row.cost,
@@ -234,6 +253,11 @@ export function statsSnapshot({ hours = 24, accountId = 'all' } = {}) {
       cachedTokens,
       cacheWriteTokens,
       completionTokens,
+      reasoningTokens,
+      textTokens,
+      reasoningChars,
+      reasoningShare: reasoningOutputTokens ? reasoningTokens / reasoningOutputTokens : null,
+      reasoningSamples: reasoningKnown.length,
       totalTokens: promptTokens + completionTokens,
       cost,
       cacheHitRate: promptTokens ? cachedTokens / promptTokens : null,

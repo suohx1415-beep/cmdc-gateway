@@ -112,6 +112,13 @@ export function translateMessagesRequest(body, config) {
   if (typeof body.top_p === 'number') warnings.push('top_p is not forwarded (not part of the wire protocol)');
   if (typeof body.top_k === 'number') warnings.push('top_k is not forwarded (not part of the wire protocol)');
 
+  // Anthropic Messages has no reasoning_effort field, so the gateway default fills in only
+  // when the caller did not pass one explicitly
+  const reasoningEffort = body.reasoning_effort ?? config.reasoningEffort ?? '';
+  if (!body.reasoning_effort && config.reasoningEffort) {
+    warnings.push(`reasoning_effort defaulted to "${config.reasoningEffort}" (gateway default; client sent none)`);
+  }
+
   const params = {
     model: body.model,
     messages,
@@ -119,7 +126,7 @@ export function translateMessagesRequest(body, config) {
     max_tokens: Number(body.max_tokens) || config.maxTokens,
     ...(system ? { system } : {}),
     ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
-    ...(body.reasoning_effort ? { reasoning_effort: body.reasoning_effort } : {}),
+    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
   };
 
   return {
@@ -277,6 +284,13 @@ export class AnthropicReply {
     });
     events.push({ event: 'message_stop', data: { type: 'message_stop' } });
     return events;
+  }
+
+  /** Reasoning characters streamed so far — fallback when upstream omits the token split. */
+  reasoningChars() {
+    let total = 0;
+    for (const block of this.blocks) if (block.type === 'thinking') total += (block.thinking ?? '').length;
+    return total;
   }
 
   message() {

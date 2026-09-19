@@ -353,6 +353,9 @@ function paintStatus(){
   $('ov-cli').textContent = s.cliVersion;
   $('ov-models').textContent = s.models.filterApplied ? s.models.accessible + ' / ' + s.models.total : String(s.models.total);
   $('ov-mode').textContent = s.mode + ' / ' + s.permissionMode;
+  $('ov-reasoning').textContent = s.reasoningEffort
+    ? (s.reasoningEffort + '（网关默认，客户端未指定时生效）')
+    : '未设置（客户端没说就用上游默认）';
   $('ov-cwd').textContent = s.cwd;
   $('ov-store').textContent = s.storeFile;
   var fp = s.fingerprint;
@@ -670,6 +673,8 @@ function paintStats(){
   $('st-cost-sub').textContent = '按 models.json 价格估算';
   $('st-tokens').textContent = tokens(t.totalTokens);
   $('st-tokens-sub').textContent = '入 ' + tokens(t.promptTokens) + ' / 出 ' + tokens(t.completionTokens);
+  $('st-reasoning').textContent = pct(t.reasoningShare);
+  $('st-reasoning-sub').textContent = '推理 ' + tokens(t.reasoningTokens) + ' / 正文 ' + tokens(t.textTokens) + ' tokens';
   $('st-success').textContent = t.requests ? pct(t.ok / t.requests) : '-';
   $('st-success-sub').textContent = '窗口 ' + windowLabel(s.windowHours);
 
@@ -684,10 +689,11 @@ function paintStats(){
       '<td class="num ' + cacheClass(m.cacheHitRate) + '">' + pct(m.cacheHitRate) + '</td>' +
       '<td class="num">' + (m.avgTtftMs === null ? '-' : ms(m.avgTtftMs)) + '</td>' +
       '<td class="num">' + tokens(m.promptTokens + m.completionTokens) + '</td>' +
+      '<td class="num">' + pct(m.reasoningShare) + '</td>' +
       '<td>' + priceCell(m.price) + '</td>' +
       '<td class="num">' + money(m.cost) + '</td></tr>';
   }
-  $('stats-body').innerHTML = rows || '<tr><td colspan="7"><div class="empty">窗口内还没有经过本网关的请求</div></td></tr>';
+  $('stats-body').innerHTML = rows || '<tr><td colspan="8"><div class="empty">窗口内还没有经过本网关的请求</div></td></tr>';
 
   var scopeLabel = s.accountId === 'all' ? '（全部账号合计）' : '（单个账号）';
   $('stats-scope').textContent = scopeLabel;
@@ -713,6 +719,12 @@ function paintLive(){
   $('live-text').textContent = live.on ? '实时已连接' : (live.stopped ? '实时已停用' : '实时重连中');
 }
 
+function reasoningCell(r){
+  if (typeof r.reasoningTokens === 'number' && r.reasoningTokens > 0) return tokens(r.reasoningTokens);
+  if (typeof r.reasoningChars === 'number' && r.reasoningChars > 0) return tokens(r.reasoningChars) + '<span class="dim">字</span>';
+  return '<span class="dim">-</span>';
+}
+
 function paintFeed(){
   var rows = '';
   for (var i=0;i<live.feed.length;i++){
@@ -725,10 +737,11 @@ function paintFeed(){
       '<td class="num">' + (typeof r.ttftMs === 'number' ? r.ttftMs + ' ms' : '-') + '</td>' +
       '<td class="num">' + (typeof r.durationMs === 'number' ? r.durationMs + ' ms' : '-') + '</td>' +
       '<td class="num ' + cacheClass(r.promptTokens ? r.cachedTokens / r.promptTokens : null) + '">' + cachePct + '</td>' +
+      '<td class="num">' + reasoningCell(r) + '</td>' +
       '<td class="num">' + ((r.promptTokens || 0) + (r.completionTokens || 0)) + '</td>' +
       '<td class="num">' + money(r.cost) + (r.ok ? '' : ' <span class="tag no">失败</span>') + '</td></tr>';
   }
-  $('feed-body').innerHTML = rows || '<tr><td colspan="8"><div class="feed-empty">等待请求</div></td></tr>';
+  $('feed-body').innerHTML = rows || '<tr><td colspan="9"><div class="feed-empty">等待请求</div></td></tr>';
 }
 
 function handleFrame(frame){
@@ -1217,6 +1230,7 @@ export function panelHtml() {
         <div class="row"><dt>cli 版本</dt><dd class="mono" id="ov-cli">-</dd></div>
         <div class="row"><dt>可用模型</dt><dd class="mono" id="ov-models">-</dd></div>
         <div class="row"><dt>mode</dt><dd class="mono" id="ov-mode">-</dd></div>
+        <div class="row"><dt>推理档位</dt><dd id="ov-reasoning">-</dd></div>
         <div class="row"><dt>工作目录</dt><dd class="mono" id="ov-cwd">-</dd></div>
         <div class="row"><dt>凭据文件</dt><dd class="mono" id="ov-store">-</dd></div>
         <div class="row"><dt>配置文件</dt><dd class="mono" id="ov-config">-</dd></div>
@@ -1258,6 +1272,7 @@ export function panelHtml() {
       <div class="metric"><div class="k">平均耗时</div><div class="v" id="st-duration">-</div><div class="s" id="st-duration-sub">-</div></div>
       <div class="metric"><div class="k">成功率</div><div class="v" id="st-success">-</div><div class="s" id="st-success-sub">-</div></div>
       <div class="metric"><div class="k">tokens</div><div class="v" id="st-tokens">-</div><div class="s" id="st-tokens-sub">-</div></div>
+      <div class="metric"><div class="k">推理占比</div><div class="v" id="st-reasoning">-</div><div class="s" id="st-reasoning-sub">-</div></div>
       <div class="metric"><div class="k">估算花费</div><div class="v" id="st-cost">-</div><div class="s" id="st-cost-sub">-</div></div>
     </div>
 
@@ -1280,11 +1295,11 @@ export function panelHtml() {
     <h2 class="section">实时活动</h2>
     <div class="table-wrap" style="max-height:330px">
       <table>
-        <thead><tr><th>时间</th><th>模型</th><th>方式</th><th>首字</th><th>耗时</th><th>缓存</th><th>tokens</th><th>花费</th></tr></thead>
-        <tbody id="feed-body"><tr><td colspan="8"><div class="feed-empty">等待请求</div></td></tr></tbody>
+        <thead><tr><th>时间</th><th>模型</th><th>方式</th><th>首字</th><th>耗时</th><th>缓存</th><th>推理</th><th>tokens</th><th>花费</th></tr></thead>
+        <tbody id="feed-body"><tr><td colspan="9"><div class="feed-empty">等待请求</div></td></tr></tbody>
       </table>
     </div>
-    <div class="help">新请求由服务端实时推送，无需刷新。留空 system 时后端注入的 harness 提示词通常大量命中缓存。</div>
+    <div class="help">新请求由服务端实时推送，无需刷新。留空 system 时后端注入的 harness 提示词通常大量命中缓存。「推理」是模型内部思考的 token 量（上游 outputTokenDetails 的拆分），**已含在 tokens 总数里**，不计入可见正文。</div>
 
     <h2 class="section">按账号</h2>
     <div class="table-wrap">
@@ -1297,8 +1312,8 @@ export function panelHtml() {
     <h2 class="section">按模型</h2>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>模型</th><th>请求</th><th>缓存命中</th><th>平均首字</th><th>tokens</th><th>价格 入/出/缓存 $/M</th><th>估算花费</th></tr></thead>
-        <tbody id="stats-body"><tr><td colspan="7"><div class="empty">读取中</div></td></tr></tbody>
+        <thead><tr><th>模型</th><th>请求</th><th>缓存命中</th><th>平均首字</th><th>tokens</th><th>推理占比</th><th>价格 入/出/缓存 $/M</th><th>估算花费</th></tr></thead>
+        <tbody id="stats-body"><tr><td colspan="8"><div class="empty">读取中</div></td></tr></tbody>
       </table>
     </div>
     <div class="msg" id="stats-msg"></div>

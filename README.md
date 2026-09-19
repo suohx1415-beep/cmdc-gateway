@@ -317,7 +317,7 @@ Endpoints:
 | GET | `/api/status` | 运行状态、登录身份、模型计数、指纹状态（不含明文 Key） |
 | GET | `/api/models` | 模型目录；`?scope=accessible`（默认，按套餐过滤）或 `?scope=all` |
 | GET | `/api/quota` | 套餐、余额、限流窗口、本期用量 |
-| GET | `/api/stats` | 本网关指标：缓存命中、平均首字、消耗曲线、按模型汇总（`?hours=1\|24\|168`） |
+| GET | `/api/stats` | 本网关指标：缓存命中、平均首字、推理占比、消耗曲线、按模型汇总（`?hours=1\|24\|168`） |
 | GET | `/api/events` | **SSE 实时推送**：`request` / `stats` / `status` / `quota`，见下文 |
 | POST | `/api/plan/refresh` | 强制重新拉取套餐并重算可用模型 |
 | POST | `/api/auth/apikey` | 添加/更新账号：`{ "apiKey": "..." }`（同名合并） |
@@ -416,7 +416,9 @@ https://commandcode.ai/studio/auth/cli?callback=http://127.0.0.1:<port>/callback
 - **平均首字**：从收到请求到上游第一个事件的平均耗时，只统计流式请求（非流式无法单独测出首字），同时给出样本数。
 - **平均耗时 / 成功率**：整次请求的墙钟时间与失败计数。
 - **消耗曲线**：按时间分桶的折线，可在「花费 / tokens」之间切换；花费按 `models.json` 的挂牌价估算。图表按容器实际像素绘制（viewBox 与渲染尺寸一致），窗口缩放会重绘，不会出现拉伸变形；入场动画只在切换窗口或指标时播放，实时刷新不会反复闪动。
-- **按模型汇总**：每个模型的请求数、缓存命中、平均首字、tokens、单价与估算花费。
+- **按模型汇总**：每个模型的请求数、缓存命中、平均首字、tokens、推理占比、单价与估算花费。
+- **推理占比**：`reasoningTokens / completionTokens`。关键前提：上游的 `outputTokens` **本身就包含推理**（例如「17×23」这种小问题就能是 57 推理 + 27 正文 = 84），网关额外从 `outputTokenDetails` 把两部分拆开记录。所以这一项直接回答「首字慢是慢在模型内部思考，还是慢在别处」。实测一道简单算术题推理就占 68%，Agent 长任务通常更高。
+- 「实时活动」表里的「推理」列是单次请求的推理 token 量；旧记录（升级前采集的）没有这个字段，会显示 `-`。
 
 原始记录（最多 2000 条、保留 7 天）落在 `~/.cmdc-gateway/stats.json`，写入做了 2 秒防抖，指标采集失败不会影响正常请求。也可直接调 `GET /api/stats?hours=24`。
 
@@ -512,6 +514,7 @@ print(msg.content)
 | `--mode` | `CMD_GATEWAY_MODE` | `agent` | 传给后端的 `mode`（cli 内部取值：`agent`/`compact`/`title-gen`/…） |
 | `--permission-mode` | `CMD_GATEWAY_PERMISSION_MODE` | `standard` | `standard` / `auto-accept` / `plan`（`bypass` 会映射为 `auto-accept`） |
 | `--max-tokens` | `CMD_GATEWAY_MAX_TOKENS` | `64000` | 客户端未提供 max_tokens 时的默认值 |
+| `--reasoning-effort` | `CMD_GATEWAY_REASONING_EFFORT` | 空（不注入） | 客户端**未指定**推理档位时注入的默认值（如 `low`）；客户端显式指定的值永远优先。默认留空是因为网关不应静默改变已有客户端的模型行为 |
 | `--cwd` | `CMD_GATEWAY_CWD` | 进程 cwd | 发给后端的 `config.workingDir` |
 | `--callback-base` | `CMD_GATEWAY_CALLBACK_BASE` | `http://127.0.0.1:<port>` | 浏览器登录回调的基地址 |
 | `--client-key` | `CMD_GATEWAY_CLIENT_KEY` | 自动生成的 `cmdc_...` | 访问密钥；显式设置后**本机也要带**，配合 `--save-port` 可写回配置 |
@@ -535,6 +538,7 @@ baseUrl 预设：
 - **推理内容**：后端 `reasoning-*` 事件在 OpenAI 侧以 `delta.reasoning_content` 输出；在 Anthropic 侧输出为 `thinking` 块，并在关块前补一个 `signature_delta`（`signature` 为空字符串，因为上游并不提供真实签名）。
 - **工具结果的形状会保留**：OpenAI 侧的 `tool` 消息 / Anthropic 侧的 `tool_result` 块如果是对象或数字（不是纯文本），会被 JSON 序列化后传给模型，而不是被当成空字符串丢掉。
 - **用量字段容错**：上游 `finish` 事件如果不带用量（或字段名从 `totalUsage` 变成 `usage`），网关不会把已经算出来的 tokens 清零，也不会凭空编造数字。
+- **推理 token 单独可见**：`outputTokens` 包含推理，网关额外拆出 `reasoningTokens` / `textTokens` 记进指标，可用 `GET /api/stats` 的 `totals.reasoningShare` 或面板「指标」页的「推理占比」查看。
 - **上游始终流式**：网关内部恒以 `stream: true` 请求后端；客户端要 `stream: false` 时由网关聚合后返回完整 JSON。
 - **`n > 1` 不支持**：只返回单个 choice。
 - **远程图片**：`image_url` 为 http(s) 时按原样透传（由后端抓取）；data URL 会解析出 mimeType。
@@ -601,6 +605,7 @@ models.json                 生成产物（含 access 规则）
 | 侧栏没有「统计范围」下拉 | 只有一个账号时自动隐藏，单账号就是单账号模式 |
 | 某个账号被标记「冷却至 …」 | 它刚返回了 429 或额度不足，暂时不会被选中。`failover` 下冷却默认 5 分钟、`sequential` 下冷却到额度窗口重置；所有账号都冷却时会放开限制继续轮换 |
 | 某个账号被标记「Key 已失效」 | 它返回了 401/403，网关已把它踢出轮换（不再白跑）。确认 Key 还能用就点「重新校验」，只是临时抖动就点「清除冷却」，确实换了 Key 就重新登录 |
+| **首字（TTFT）很慢** | 先看面板「指标」页的**推理占比**：占比高就是时间花在模型内部思考，用 `--reasoning-effort low` 收紧即可。其次看上下文：每次请求 130K+ prompt tokens 会明显拉长首字（实测平均值 139K）。另外本网关走的是 `api.commandcode.ai` 这一跳，与 cmdc CLI 同路，**实测与直连上游同速甚至更快**，但存在约 850ms 的底噪 —— 这个底噪不在网关里，改代码改不掉 |
 | 额度显示成「查询失败」而不是 0 | 这是故意的：额度接口报错时网关会说明原因（含 HTTP 状态码），不会拿 0 冒充余额。看 `authError` 判断是不是 Key 失交 |
 | 合计余额下面提示「部分数据缺失」 | 有账号查额度失败了，合计只包含成功的那些。去「用量」页的「按账号明细」看是哪个账号 |
 | 账号页按钮点了返回 409 `readonly_store` | 本次启动用了 `--api-key` / 环境变量提供 Key，账号管理会被拒绝（不落盘、也不会生效）。去掉该参数并用面板登录才能用多账号 |

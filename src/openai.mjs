@@ -123,7 +123,13 @@ export function translateChatRequest(body, config) {
 
   const maxTokens = Number(body.max_completion_tokens ?? body.max_tokens) || config.maxTokens;
   const temperature = typeof body.temperature === 'number' ? body.temperature : undefined;
-  const reasoningEffort = body.reasoning_effort ?? body.reasoning?.effort;
+  // the client always wins; the gateway default only fills the gap so upstream stops
+  // silently picking its own (usually heavier) reasoning depth
+  const clientEffort = body.reasoning_effort ?? body.reasoning?.effort;
+  const reasoningEffort = clientEffort ?? config.reasoningEffort;
+  if (!clientEffort && config.reasoningEffort) {
+    warnings.push(`reasoning_effort defaulted to "${config.reasoningEffort}" (gateway default; client sent none)`);
+  }
 
   if (typeof body.top_p === 'number') warnings.push('top_p is not forwarded (not part of the wire protocol)');
   if (body.n && body.n > 1) warnings.push('n > 1 is not supported; returning a single choice');
@@ -242,6 +248,11 @@ export class OpenAIReply {
       });
     }
     return chunks;
+  }
+
+  /** Reasoning characters streamed so far — fallback when upstream omits the token split. */
+  reasoningChars() {
+    return this.reasoning.length;
   }
 
   usagePayload() {
