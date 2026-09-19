@@ -1,0 +1,18 @@
+{
+  "name": "cmdc-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenAI + Anthropic compatible gateway in front of the Command Code (cmdc) backend",
+  "bin": {
+    "cmdc-gateway": "src/server.mjs"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "models": "node scripts/extract-models.mjs",
+    "check": "node --check src/server.mjs && node --check src/backend.mjs && node --check src/openai.mjs && node --check src/anthropic.mjs && node --check src/config.mjs && node --check src/models.mjs && node --check src/auth.mjs && node --check src/panel.mjs && node --check src/wire.mjs && node --check src/plan.mjs && node --check src/fingerprint.mjs && node --check src/stats.mjs && node --check src/events.mjs && node --check scripts/extract-models.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
