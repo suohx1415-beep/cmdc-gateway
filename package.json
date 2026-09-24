@@ -34,6 +34,8 @@
   "scripts": {
     "start": "node src/server.mjs",
     "models": "node scripts/extract-models.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "test:tap": "node --test --test-reporter=tap \"test/*.test.mjs\"",
     "check": "node --check src/server.mjs && node --check src/backend.mjs && node --check src/openai.mjs && node --check src/anthropic.mjs && node --check src/config.mjs && node --check src/models.mjs && node --check src/auth.mjs && node --check src/panel.mjs && node --check src/wire.mjs && node --check src/plan.mjs && node --check src/fingerprint.mjs && node --check src/stats.mjs && node --check src/events.mjs && node --check scripts/extract-models.mjs"
   },
   "engines": {

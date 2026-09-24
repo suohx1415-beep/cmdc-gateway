@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: node ${{ matrix.node }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['22.x', '24.x', '26.x']
+        exclude:
+          # The engine floor and the newest release are what matter on Windows (the launcher
+          # there is a .bat); the full version sweep runs on Linux.
+          - os: windows-latest
+            node: '24.x'
+          - os: windows-latest
+            node: '26.x'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+
+      # No install step on purpose: the project is zero-dependency and has no lockfile, so a
+      # clean checkout is already the thing that ships.
+      - name: Syntax-check every module
+        run: npm run check
+
+      - name: Run the test suite
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:tap | tee tap.txt
+          # `node --test <glob>` exits 0 even when the glob matched nothing, so a suite that
+          # silently ran no tests would still look green. Require a real count.
+          ran="$(sed -n 's/^# tests \([0-9][0-9]*\)$/\1/p' tap.txt | tail -n 1)"
+          if [ -z "$ran" ] || [ "$ran" -lt 1 ]; then
+            echo "::error::no tests were executed"
+            exit 1
+          fi
+          echo "executed $ran tests"
+
+      # Guards the package.json `files` allow-list: machine-local state such as .commandcode/
+      # must never become publishable, and a blacklist-based .gitignore fallback would not
+      # guarantee that.
+      - name: Check what npm would publish
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '22.x'
+        shell: bash
+        run: |
+          npm pack --dry-run 2>&1 | tee pack.txt
+          if grep -E 'commandcode|taste|auth\.json|stats\.json|(^|[^a-z])\.env' pack.txt; then
+            echo "::error::personal or credential files would be published"
+            exit 1
+          fi
+          grep -q 'LICENSE' pack.txt || { echo "::error::LICENSE is missing from the package"; exit 1; }

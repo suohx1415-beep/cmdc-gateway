@@ -646,6 +646,44 @@ models.json                 生成产物（含 access 规则）
 
 ---
 
+## 开发与测试
+
+零依赖、零构建、无打包步骤：改完直接跑。
+
+```bash
+npm run check      # 逐模块语法检查
+npm test           # 测试套件（Node 内置 node:test，无第三方框架）
+npm run test:tap   # 同上，TAP 输出，供 CI 断言
+```
+
+**不需要 `npm install`** —— 测试框架是 Node 自带的 `node:test`，这也是本项目「零第三方依赖」的一部分。
+
+测试围绕实际修过的缺陷展开，不是凑覆盖率：
+
+| 测试文件 | 守的是什么事 |
+| --- | --- |
+| `config.test.mjs` | access key 生成后必须落盘并复用（每次启动重新生成会让所有客户端当场失效）；端口固定；旧公开 key 只报警不自动改 |
+| `accounts.test.mjs` | `activeId` 是用户首选，**并发请求不得把它改回去**；失效与冷却跨重启保留；`--api-key` 下拒绝一切变更 |
+| `anthropic.test.mjs` | `signature_delta` 必须在 thinking 块关闭前发出；`finish` 不带 usage 时不得清零已知 token |
+| `wire.test.mjs` | 结构化工具结果不得被静默丢弃；usage 拆分的推算 |
+| `plan.test.mjs` | 按量 / 赠送余额解锁全部模型；`models.json` 必须带 `access` 表 |
+| `models.test.mjs` | `models.json` 不含本机路径；模型 id 唯一；价格完整 |
+| `stats.test.mjs` | 只有真的上报了推理拆分的请求才计入推理占比，旧记录按「未知」而非 0 |
+| `panel.test.mjs` | 面板内嵌脚本可解析，且脚本里 `$('id')` 引用的元素在 HTML 里都存在 |
+
+### 测试不会碰你的真实数据
+
+`test/helpers.mjs` 在 `src/config.mjs` 被加载**之前**就把 `HOME` / `USERPROFILE` 指向临时目录（`GATEWAY_STORE_DIR` 是模块加载时由 `os.homedir()` 算出来的），随后**断言 store 确实被移走了**：隔离一旦失效就直接抛错退出，而不是悄悄写进你真实的 `~/.cmdc-gateway/`。
+
+### CI
+
+`.github/workflows/ci.yml` 在每次 push / PR 时于 **Node 22 / 24 / 26**（Ubuntu；另加 Windows 22，那边还有个 `.bat` 启动器）上跑 `npm run check` 与测试，并额外确认两件事：
+
+1. **测试真的执行了。** `node --test <glob>` 在 glob 一个文件都没匹配到时**退出码仍然是 0**，所以「静默跑了 0 个测试」看起来会是绿的；CI 会断言 TAP 输出里的 `# tests` 不为 0。
+2. **`npm pack` 不会带上本机文件。** `package.json` 的 `files` 是**白名单**，CI 会实际打包一次，检查 `.commandcode/`、`auth.json`、`stats.json` 之类没有混进去。之所以用白名单而不是黑名单：npm 只在没有 `.npmignore` 时才回退去读 `.gitignore`（打包时会打印 `gitignore-fallback` 警告），黑名单漏一行就会把个人数据发布出去，而且不会有任何报错。
+
+---
+
 ## 排错
 
 | 现象 | 处理 |
