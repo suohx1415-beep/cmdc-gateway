@@ -1,12 +1,36 @@
 {
   "name": "cmdc-gateway",
   "version": "0.1.0",
-  "private": true,
-  "type": "module",
   "description": "OpenAI + Anthropic compatible gateway in front of the Command Code (cmdc) backend",
+  "license": "MIT",
+  "type": "module",
   "bin": {
     "cmdc-gateway": "src/server.mjs"
   },
+  "files": [
+    "src/",
+    "scripts/",
+    "models.json",
+    "start-gateway.bat"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/suohx1415-beep/cmdc-gateway.git"
+  },
+  "bugs": {
+    "url": "https://github.com/suohx1415-beep/cmdc-gateway/issues"
+  },
+  "homepage": "https://github.com/suohx1415-beep/cmdc-gateway#readme",
+  "keywords": [
+    "cmdc",
+    "command-code",
+    "gateway",
+    "openai-compatible",
+    "anthropic-compatible",
+    "reverse-proxy",
+    "llm",
+    "sse"
+  ],
   "scripts": {
     "start": "node src/server.mjs",
     "models": "node scripts/extract-models.mjs",
