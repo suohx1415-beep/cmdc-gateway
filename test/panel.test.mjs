@@ -71,6 +71,128 @@ test('the panel never inlines a real access key', () => {
   assert.doesNotMatch(html, /cmdc_[0-9a-f]{40}/, 'the panel must not embed a concrete key');
 });
 
+/* ------------------------------------------------------------------ cache dial */
+
+const dial = /<svg viewBox="0 0 200 146"[\s\S]*?<\/svg>/.exec(html)?.[0] ?? '';
+const dialPart = (selector) => new RegExp(`<(?:line|path|circle|text) class="${selector}"[^>]*>`).exec(dial)?.[0] ?? '';
+const attribute = (source, name) => new RegExp(`(?:^|\\s)${name}="([^"]*)"`).exec(source)?.[1] ?? null;
+
+test('the cache hit rate is drawn as a dial, not a progress bar', () => {
+  assert.ok(dial, 'the sidebar dial markup is missing');
+  assert.equal(html.includes('class="cache-rate"'), false, 'the old progress-bar block should be gone');
+  assert.equal(html.includes('.cache-rate{'), false, 'the old styles should be gone');
+  assert.ok(html.includes('class="cache-gauge"'));
+  for (const part of ['track', 'arc', 'needle', 'hub']) {
+    assert.ok(dial.includes(`class="${part}"`), `the dial is missing its ${part}`);
+  }
+});
+
+test('the dial has a real instrument scale', () => {
+  const ticks = [...dial.matchAll(/<line class="tick( major)?"/g)];
+  assert.equal(ticks.length, 41, 'one tick every 6° across the sweep');
+  assert.equal(ticks.filter((match) => match[1]).length, 9, 'a major tick every 30°');
+  assert.equal([...dial.matchAll(/class="tick-label"/g)].length, 5, 'labelled 0 / 25 / 50 / 75 / 100');
+  for (const value of [0, 25, 50, 75, 100]) {
+    assert.ok(dial.includes(`>${value}</text>`), `the ${value} label is missing`);
+  }
+});
+
+test('the needle rests at zero and the value arc starts empty', () => {
+  const needle = dialPart('needle');
+  const rotation = Number(/rotate\((-?[\d.]+)/.exec(attribute(needle, 'transform') ?? '')?.[1]);
+  // the sweep starts at 150° and the needle is drawn pointing up (270°)
+  assert.equal(rotation, 150 - 270, 'the needle must rest at the 0 end of the scale');
+
+  const arc = dialPart('arc');
+  assert.equal(attribute(arc, 'stroke-dashoffset'), attribute(arc, 'data-len'), 'the arc starts fully hidden');
+  assert.equal(attribute(arc, 'stroke-dasharray'), attribute(arc, 'data-len'));
+});
+
+test('the arc length attribute agrees with the path it draws', () => {
+  // the client animates with stroke-dashoffset, so data-len has to match the real arc length
+  // exactly — otherwise the needle and the coloured arc would disagree about the same value
+  const arc = dialPart('arc');
+  const path = attribute(arc, 'd');
+  const parsed = /^M ([\d.-]+) ([\d.-]+) A ([\d.]+) [\d.]+ 0 1 1 ([\d.-]+) ([\d.-]+)$/.exec(path);
+  assert.ok(parsed, `unexpected arc path: ${path}`);
+
+  const [, startX, startY, radius, endX, endY] = parsed.map(Number);
+  const hub = dialPart('hub');
+  const cx = Number(attribute(hub, 'cx'));
+  const cy = Number(attribute(hub, 'cy'));
+  const degrees = (x, y) => (Math.atan2(y - cy, x - cx) * 180) / Math.PI;
+
+  assert.equal(degrees(startX, startY).toFixed(1), '150.0', 'the scale should start at the lower left');
+  let sweep = degrees(endX, endY) - degrees(startX, startY);
+  if (sweep <= 0) sweep += 360;
+  assert.equal(sweep.toFixed(1), '240.0', 'a speedometer sweep');
+
+  const expected = (radius * sweep * Math.PI) / 180;
+  assert.equal(Number(attribute(arc, 'data-len')).toFixed(2), expected.toFixed(2));
+  assert.ok(Number(attribute(arc, 'data-len')) > 0);
+});
+
+test('every dial coordinate stays inside the viewBox', () => {
+  const width = 200;
+  const height = 146;
+  const points = [];
+
+  for (const match of dial.matchAll(/<line class="tick[^"]*" x1="([\d.-]+)" y1="([\d.-]+)" x2="([\d.-]+)" y2="([\d.-]+)"/g)) {
+    points.push([Number(match[1]), Number(match[2])], [Number(match[3]), Number(match[4])]);
+  }
+  for (const match of dial.matchAll(/<path class="(?:track|arc)" d="M ([\d.-]+) ([\d.-]+) A [\d.]+ [\d.]+ 0 1 1 ([\d.-]+) ([\d.-]+)"/g)) {
+    points.push([Number(match[1]), Number(match[2])], [Number(match[3]), Number(match[4])]);
+  }
+  for (const match of dial.matchAll(/<text class="tick-label" x="([\d.-]+)" y="([\d.-]+)"/g)) {
+    // 8.5px glyphs sit around their anchor
+    points.push([Number(match[1]) - 8, Number(match[2]) - 7], [Number(match[1]) + 8, Number(match[2]) + 2]);
+  }
+
+  // the needle sweeps the whole scale, so check both ends at every angle it can reach
+  const needle = /<line class="needle" x1="([\d.-]+)" y1="([\d.-]+)" x2="([\d.-]+)" y2="([\d.-]+)" transform="rotate\((-?[\d.]+) ([\d.]+) ([\d.]+)\)"/.exec(dial);
+  assert.ok(needle, 'the needle is missing');
+  const ends = [[Number(needle[1]), Number(needle[2])], [Number(needle[3]), Number(needle[4])]];
+  const originX = Number(needle[6]);
+  const originY = Number(needle[7]);
+  for (let step = 0; step <= 240; step += 12) {
+    const radians = ((Number(needle[5]) + step) * Math.PI) / 180;
+    for (const [x, y] of ends) {
+      const dx = x - originX;
+      const dy = y - originY;
+      points.push([
+        originX + dx * Math.cos(radians) - dy * Math.sin(radians),
+        originY + dx * Math.sin(radians) + dy * Math.cos(radians),
+      ]);
+    }
+  }
+
+  assert.equal(/NaN|undefined/.test(dial), false, 'the dial contains a non-numeric value');
+  assert.ok(points.length > 50, 'expected the dial to be dense enough to be worth checking');
+  for (const [x, y] of points) {
+    assert.ok(Number.isFinite(x) && Number.isFinite(y), `bad coordinate: ${x}, ${y}`);
+    assert.ok(x >= -1 && x <= width + 1, `x=${x} falls outside the ${width} wide viewBox`);
+    assert.ok(y >= -1 && y <= height + 1, `y=${y} falls outside the ${height} tall viewBox`);
+  }
+});
+
+test('the readout sits outside the dial so the needle can never cross it', () => {
+  // the needle sweeps the lower half of the dial, so a readout drawn inside it would be crossed
+  // at low rates — and always in the empty state, where the needle rests at zero
+  assert.equal(dial.includes('readout'), false, 'the dial must not draw the value itself');
+  assert.ok(markup.includes('class="readout" id="cache-rate-value"'), 'the value node must keep its id');
+  assert.ok(markup.includes('id="cache-rate-sub"'));
+});
+
+/* ------------------------------------------------------------------ per-request bars */
+
+test('the live feed shows a bar for each request\'s cache hit rate and first token', () => {
+  assert.ok(script.includes('function miniBar('), 'the inline bar helper is missing');
+  assert.match(script, /miniBar\(cacheRate, /, 'the cache bar should use the per-request rate');
+  assert.match(script, /miniBar\(slowest && typeof r\.ttftMs === 'number'/, 'the first-token bar is missing');
+  // the first-token bar is relative, so the panel has to say what it is relative to
+  assert.match(html, /最慢的一条为满格/);
+});
+
 /* ------------------------------------------------------------------ callback page */
 
 test('the OAuth callback page renders both outcomes', () => {

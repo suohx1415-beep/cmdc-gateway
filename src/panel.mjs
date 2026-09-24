@@ -111,15 +111,39 @@ h2.section:first-child{margin-top:0}
 .chart-foot{display:flex; justify-content:space-between; gap:12px; margin-top:10px;
   font-family:var(--mono); font-size:11.5px; color:var(--text-faint)}
 
-/* cache hit rate: red < 80%, orange 80-90%, green >= 90% */
-.cache-rate{border-top:1px solid var(--line); margin-top:3px; padding-top:12px}
-.cache-rate .k{font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--text-faint)}
-.cache-rate .v{font-family:var(--mono); font-size:26px; font-weight:650; letter-spacing:-.02em; margin-top:4px; line-height:1.1}
-.cache-rate .s{font-size:11px; color:var(--text-faint); margin-top:3px}
-.cache-rate[data-level="low"] .v{color:var(--err)}
-.cache-rate[data-level="mid"] .v{color:var(--warn)}
-.cache-rate[data-level="high"] .v{color:var(--ok)}
+/* cache hit rate as a car-dashboard dial: red < 80%, orange 80-90%, green >= 90% */
+.cache-gauge{border-top:1px solid var(--line); margin-top:3px; padding-top:12px}
+.cache-gauge .gauge-head{display:flex; align-items:baseline; justify-content:space-between; gap:6px}
+.cache-gauge .k{font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--text-faint)}
+.cache-gauge svg{display:block; width:100%; max-width:178px; height:auto; margin:2px auto 0; overflow:visible}
+.cache-gauge .track{fill:none; stroke:var(--line); stroke-width:2}
+.cache-gauge .arc{fill:none; stroke:var(--text-faint); stroke-width:3;
+  transition:stroke-dashoffset .55s cubic-bezier(.2,.8,.2,1), stroke .2s linear}
+.cache-gauge .tick{stroke:var(--line-strong); stroke-width:1}
+.cache-gauge .tick.major{stroke:var(--text-faint); stroke-width:1.4}
+.cache-gauge .tick-label{fill:var(--text-faint); font-family:var(--mono); font-size:8.5px; text-anchor:middle}
+.cache-gauge .needle{stroke:var(--text-dim); stroke-width:2; stroke-linecap:round;
+  transition:transform .55s cubic-bezier(.2,.8,.2,1), stroke .2s linear}
+.cache-gauge .hub{fill:var(--surface); stroke:var(--text-dim); stroke-width:1.6; transition:stroke .2s linear}
+.cache-gauge .readout{font-family:var(--mono); font-size:25px; font-weight:650; letter-spacing:-.02em;
+  line-height:1.05; text-align:center; margin-top:1px; color:var(--text)}
+.cache-gauge .s{font-size:11px; color:var(--text-faint); margin-top:3px; text-align:center}
+.cache-gauge[data-level="low"] .arc,.cache-gauge[data-level="low"] .needle{stroke:var(--err)}
+.cache-gauge[data-level="low"] .hub{stroke:var(--err)}
+.cache-gauge[data-level="low"] .readout{color:var(--err)}
+.cache-gauge[data-level="mid"] .arc,.cache-gauge[data-level="mid"] .needle{stroke:var(--warn)}
+.cache-gauge[data-level="mid"] .hub{stroke:var(--warn)}
+.cache-gauge[data-level="mid"] .readout{color:var(--warn)}
+.cache-gauge[data-level="high"] .arc,.cache-gauge[data-level="high"] .needle{stroke:var(--ok)}
+.cache-gauge[data-level="high"] .hub{stroke:var(--ok)}
+.cache-gauge[data-level="high"] .readout{color:var(--ok)}
 td.cache-low{color:var(--err)} td.cache-mid{color:var(--warn)} td.cache-high{color:var(--ok)}
+/* per-request inline bars in the live feed */
+.mini{height:3px; background:var(--line); margin-top:4px; overflow:hidden}
+.mini > i{display:block; height:100%; width:0; background:var(--text-faint);
+  transition:width .45s cubic-bezier(.2,.8,.2,1)}
+.mini > i.low{background:var(--err)} .mini > i.mid{background:var(--warn)} .mini > i.high{background:var(--ok)}
+.mini > i.speed{background:var(--accent)}
 
 /* rate-limit windows, compact, bottom-left */
 .side-windows{border-top:1px solid var(--line); margin-top:3px; padding-top:12px;
@@ -598,10 +622,25 @@ function cacheClass(rate){
 
 function windowLabel(hours){ return hours === 168 ? '7 天' : hours + ' 小时'; }
 
+/** Drives the cache dial: the needle angle and the drawn arc both come from the same rate. */
+function paintGauge(hostId, rate){
+  var host = $(hostId);
+  if (!host) return;
+  host.setAttribute('data-level', cacheLevel(rate));
+  var t = (typeof rate === 'number' && isFinite(rate)) ? Math.min(1, Math.max(0, rate)) : 0;
+  var needle = host.querySelector('.needle');
+  if (needle) needle.setAttribute('transform', 'rotate(' + (150 + 240 * t - 270).toFixed(2) + ' 100 96)');
+  var arc = host.querySelector('.arc');
+  if (arc) {
+    var len = Number(arc.getAttribute('data-len')) || 0;
+    arc.setAttribute('stroke-dashoffset', (len * (1 - t)).toFixed(2));
+  }
+}
+
 function paintCacheRate(){
   var t = state.stats && state.stats.totals;
   var rate = t ? t.cacheHitRate : null;
-  $('cache-rate').setAttribute('data-level', cacheLevel(rate));
+  paintGauge('cache-rate', rate);
   $('cache-rate-value').textContent = typeof rate === 'number' ? (rate * 100).toFixed(1) + '%' : '-';
   $('cache-rate-sub').textContent = t && t.requests
     ? t.requests + ' 次请求 / ' + windowLabel(state.hours)
@@ -741,18 +780,33 @@ function reasoningCell(r){
   return '<span class="dim">-</span>';
 }
 
+/** A compact inline bar so the feed can be compared at a glance without reading every number. */
+function miniBar(ratio, cls){
+  if (typeof ratio !== 'number' || !isFinite(ratio)) return '';
+  var width = Math.max(0, Math.min(1, ratio)) * 100;
+  return '<div class="mini"><i class="' + (cls || '') + '" style="width:' + width.toFixed(1) + '%"></i></div>';
+}
+
 function paintFeed(){
+  // the first-token bar is scaled against the slowest request currently listed, so it stays
+  // readable whatever this workload's absolute latency happens to be
+  var slowest = 0;
+  for (var j=0;j<live.feed.length;j++){
+    var ttft = live.feed[j].ttftMs;
+    if (typeof ttft === 'number' && ttft > slowest) slowest = ttft;
+  }
   var rows = '';
   for (var i=0;i<live.feed.length;i++){
     var r = live.feed[i];
-    var cachePct = r.promptTokens ? pct(r.cachedTokens / r.promptTokens) : '-';
+    var cacheRate = r.promptTokens ? r.cachedTokens / r.promptTokens : null;
+    var level = cacheLevel(cacheRate);
     rows += '<tr' + (i === 0 ? ' class="fresh"' : '') + '>' +
       '<td class="num dim">' + new Date(r.t).toLocaleTimeString('zh-CN', {hour12:false}) + '</td>' +
       '<td class="id">' + esc(r.model) + '</td>' +
       '<td class="dim">' + (r.protocol === 'anthropic' ? 'Anthropic' : 'OpenAI') + (r.stream ? ' / 流式' : ' / 单次') + '</td>' +
-      '<td class="num">' + (typeof r.ttftMs === 'number' ? r.ttftMs + ' ms' : '-') + '</td>' +
-      '<td class="num">' + (typeof r.durationMs === 'number' ? r.durationMs + ' ms' : '-') + '</td>' +
-      '<td class="num ' + cacheClass(r.promptTokens ? r.cachedTokens / r.promptTokens : null) + '">' + cachePct + '</td>' +
+      '<td class="num">' + ms(r.ttftMs) + miniBar(slowest && typeof r.ttftMs === 'number' ? r.ttftMs / slowest : null, 'speed') + '</td>' +
+      '<td class="num">' + ms(r.durationMs) + '</td>' +
+      '<td class="num ' + cacheClass(cacheRate) + '">' + pct(cacheRate) + miniBar(cacheRate, level === 'none' ? '' : level) + '</td>' +
       '<td class="num">' + reasoningCell(r) + '</td>' +
       '<td class="num">' + ((r.promptTokens || 0) + (r.completionTokens || 0)) + '</td>' +
       '<td class="num">' + money(r.cost) + (r.ok ? '' : ' <span class="tag no">失败</span>') + '</td></tr>';
@@ -1181,6 +1235,56 @@ const NAV = [
   ['playground', '调试台'],
 ];
 
+/**
+ * The sidebar cache dial, drawn like a car speedometer: a 240° sweep with minor and major
+ * ticks, a needle, and the value drawn as an arc.
+ *
+ * All geometry is computed here so the markup stays static; the client only rotates the needle
+ * and moves the arc's dash offset (see paintGauge), which is what produces the sweep. The arc
+ * length travels to the client in data-len so the two can never disagree about it.
+ */
+function cacheGaugeMarkup() {
+  const cx = 100;
+  const cy = 96;
+  const radius = 64;
+  const start = 150;
+  const sweep = 240;
+  const arcLength = (radius * sweep * Math.PI) / 180;
+  const round = (value) => Number(value.toFixed(2));
+  const at = (angle, distance) => {
+    const radians = (angle * Math.PI) / 180;
+    return [cx + distance * Math.cos(radians), cy + distance * Math.sin(radians)];
+  };
+  const arcPath = () => {
+    const [x1, y1] = at(start, radius);
+    const [x2, y2] = at(start + sweep, radius);
+    return `M ${round(x1)} ${round(y1)} A ${radius} ${radius} 0 1 1 ${round(x2)} ${round(y2)}`;
+  };
+
+  let ticks = '';
+  for (let offset = 0; offset <= sweep; offset += 6) {
+    const major = offset % 30 === 0;
+    const [x1, y1] = at(start + offset, radius + 2);
+    const [x2, y2] = at(start + offset, radius + (major ? 14 : 7));
+    ticks += `<line class="tick${major ? ' major' : ''}" x1="${round(x1)}" y1="${round(y1)}" x2="${round(x2)}" y2="${round(y2)}"></line>`;
+  }
+
+  let labels = '';
+  for (let step = 0; step <= 4; step += 1) {
+    const [x, y] = at(start + (sweep * step) / 4, radius + 24);
+    labels += `<text class="tick-label" x="${round(x)}" y="${round(y + 3)}">${step * 25}</text>`;
+  }
+
+  return `<svg viewBox="0 0 200 146" role="img" aria-label="缓存命中率仪表">
+  <path class="track" d="${arcPath()}"></path>
+  <path class="arc" d="${arcPath()}" data-len="${round(arcLength)}" stroke-dasharray="${round(arcLength)}" stroke-dashoffset="${round(arcLength)}"></path>
+  ${ticks}
+  ${labels}
+  <line class="needle" x1="${cx}" y1="${cy + 11}" x2="${cx}" y2="${cy - radius + 8}" transform="rotate(-120 ${cx} ${cy})"></line>
+  <circle class="hub" cx="${cx}" cy="${cy}" r="5"></circle>
+</svg>`;
+}
+
 function navButtons() {
   return NAV.map(([id, label], index) => `<button data-tab="${id}" aria-selected="${index === 0 ? 'true' : 'false'}">${label}</button>`).join('\n    ');
 }
@@ -1215,9 +1319,10 @@ export function panelHtml() {
       <select id="side-scope"></select>
     </div>
 
-    <div class="cache-rate" id="cache-rate" data-level="none">
-      <div class="k">缓存率</div>
-      <div class="v" id="cache-rate-value">-</div>
+    <div class="cache-gauge" id="cache-rate" data-level="none">
+      <div class="gauge-head"><span class="k">缓存命中率</span></div>
+      ${cacheGaugeMarkup()}
+      <div class="readout" id="cache-rate-value">-</div>
       <div class="s" id="cache-rate-sub">等待数据</div>
     </div>
 
@@ -1318,7 +1423,7 @@ export function panelHtml() {
         <tbody id="feed-body"><tr><td colspan="9"><div class="feed-empty">等待请求</div></td></tr></tbody>
       </table>
     </div>
-    <div class="help">新请求由服务端实时推送，无需刷新。留空 system 时后端注入的 harness 提示词通常大量命中缓存。「推理」是模型内部思考的 token 量（上游 outputTokenDetails 的拆分），**已含在 tokens 总数里**，不计入可见正文。</div>
+    <div class="help">新请求由服务端实时推送，无需刷新。留空 system 时后端注入的 harness 提示词通常大量命中缓存。「推理」是模型内部思考的 token 量（上游 outputTokenDetails 的拆分），已含在 tokens 总数里，不计入可见正文。「缓存」是这一条请求自己的命中率，下方的横条以当前列表里最慢的一条为满格，用来横向比较快慢。</div>
 
     <h2 class="section">按账号</h2>
     <div class="table-wrap">
